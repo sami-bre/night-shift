@@ -68,10 +68,12 @@ def _today_live_spend() -> float:
     return total
 
 
-def _decide_mode(requested_mock: bool) -> tuple[str, bool]:
-    """Live is the default; mock is the fallback when limits hit.
+def _decide_mode(live_authorized: bool) -> tuple[str, bool]:
+    """Public visitors get deterministic mock runs, never live. Live runs only
+    on explicit demand behind NIGHTSHIFT_LIVE_TOKEN. The $2/day spend cap
+    remains as a guard on the live path; mock is the fallback when limits hit.
     Returns (mode, budget_exhausted)."""
-    if requested_mock:
+    if not live_authorized:
         return "mock", False
     if (not config.LIVE_ENABLED or not config.OPENROUTER_API_KEY
             or _today_live_spend() >= config.DAILY_SPEND_CAP_USD
@@ -109,7 +111,11 @@ async def api_run(request: Request):
     if request.headers.get("x-nightshift-mode") == "mock":
         requested_mock = True
 
-    mode, budget_exhausted = _decide_mode(requested_mock)
+    live_authorized = (bool(config.LIVE_TOKEN)
+                       and request.headers.get("x-nightshift-live", "")
+                       == config.LIVE_TOKEN
+                       and not requested_mock)
+    mode, budget_exhausted = _decide_mode(live_authorized)
     if mode == "live":
         today = time.strftime("%Y%m%d")
         if _state["live_count"]["day"] != today:
@@ -185,6 +191,18 @@ async def api_events(run_id: str, request: Request):
 
     return StreamingResponse(gen(), media_type="text/event-stream", headers={
         "Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+@app.get("/api/runs/{run_id}/agent-feed")
+async def api_agent_feed(run_id: str):
+    """Tool-call records for a run — the sidebar pre-renders the last run's
+    feed from this so it is never empty on page load."""
+    run_dir = config.RUNS_DIR / run_id
+    if not run_dir.is_dir():
+        return JSONResponse({"error": "no such run"}, status_code=404)
+    feed = [r for r in Run.load(run_id).read_city_events()
+            if r.get("type") == "agent"]
+    return JSONResponse({"run_id": run_id, "feed": feed})
 
 
 @app.get("/api/runs/{run_id}/trace")

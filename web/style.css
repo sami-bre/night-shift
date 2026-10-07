@@ -33,7 +33,6 @@ h1 {
 main { width: min(1180px, 97vw); }
 
 #stage { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 10px; }
-@media (max-width: 900px) { #stage { grid-template-columns: 1fr; } }
 
 #citywrap { position: relative; }
 #city {
@@ -56,6 +55,10 @@ main { width: min(1180px, 97vw); }
 }
 #feed { list-style: none; margin: 0; padding: 0; overflow-y: auto; flex: 1;
         font-size: .7rem; }
+#feed li.divider {
+  color: #58a6ff; font-size: .62rem; letter-spacing: .08em;
+  border-left: 0; padding-left: 0; margin: .45rem 0 .25rem;
+}
 #feed li {
   padding: .3rem .4rem; border-left: 2px solid var(--line); margin-bottom: .3rem;
   word-break: break-word;
@@ -113,6 +116,13 @@ main { width: min(1180px, 97vw); }
 
 .proof-link { font-size: .74rem; color: #58a6ff; text-decoration: none; }
 .proof-link:hover { text-decoration: underline; }
+
+/* stacked layout: city, then sidebar, then controls, then explanation */
+@media (max-width: 759px) {
+  #stage { grid-template-columns: 1fr; }
+  #sidebar { min-height: 240px; max-height: 320px; }
+  .replay-tag { top: auto; bottom: 10px; }  /* keep clear of the banner */
+}
 
 .explain {
   margin: 1rem 0 2rem; padding: .9rem 1.1rem; background: var(--panel);

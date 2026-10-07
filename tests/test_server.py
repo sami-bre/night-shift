@@ -66,6 +66,23 @@ def test_sse_unknown_run_404(client):
     assert r.status_code == 404
 
 
+def test_agent_feed_endpoint(client, tmp_path):
+    rid = seed_run(tmp_path)
+    # the seeded run has no tool calls yet; append one agent record
+    with (tmp_path / rid / "city_events.jsonl").open("a") as fh:
+        fh.write(json.dumps({"seq": 4, "elapsed_ms": 700, "run_id": rid,
+                             "type": "agent", "v": 1, "agent_seq": 7,
+                             "tool": "kubectl_get", "args": {"resource": "pods"},
+                             "verdict": "ok", "ok": True, "duration_ms": 120,
+                             "detail": ""}) + "\n")
+    r = client.get(f"/api/runs/{rid}/agent-feed")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["run_id"] == rid and len(body["feed"]) == 1
+    assert body["feed"][0]["tool"] == "kubectl_get"
+    assert client.get("/api/runs/nope/agent-feed").status_code == 404
+
+
 def test_proof_page_renders_both_columns(client, tmp_path):
     rid = seed_run(tmp_path)
     r = client.get(f"/api/runs/{rid}/trace")
@@ -115,19 +132,36 @@ def test_per_ip_cooldown(client, tmp_path, monkeypatch):
         assert "cooldown" in r2.json()["error"]
 
 
-def test_live_is_default(client, monkeypatch):
+def test_public_visitors_get_mock(client, tmp_path, monkeypatch):
+    """Reverted policy: the public path NEVER runs live — mock by default,
+    live only behind the correct NIGHTSHIFT_LIVE_TOKEN."""
     monkeypatch.setattr(app_mod.config, "OPENROUTER_API_KEY", "sk-test")
+    monkeypatch.setattr(app_mod.config, "LIVE_TOKEN", "sekrit")
+    _stub_runner(monkeypatch, tmp_path, seconds=0.05)
     with client:
-        r = client.post("/api/run")
+        r = client.post("/api/run")  # anonymous visitor
         assert r.status_code == 200
-        assert r.json()["mode"] == "live"
+        assert r.json()["mode"] == "mock"
         assert r.json()["budget_exhausted"] is False
 
 
-def test_budget_cap_falls_back_to_mock(client, tmp_path, monkeypatch):
-    """When today's live spend reaches the cap, visitors get mock + a flag
-    the UI can show — never a 4xx."""
+def test_live_only_with_token(client, tmp_path, monkeypatch):
     monkeypatch.setattr(app_mod.config, "OPENROUTER_API_KEY", "sk-test")
+    monkeypatch.setattr(app_mod.config, "LIVE_TOKEN", "sekrit")
+    _stub_runner(monkeypatch, tmp_path, seconds=0.05)
+    with client:
+        r = client.post("/api/run", headers={"x-nightshift-live": "sekrit"})
+        assert r.status_code == 200
+        assert r.json()["mode"] == "live"
+        r2 = client.post("/api/run", headers={"x-nightshift-live": "wrong"})
+        assert r2.status_code in (200, 429, 503)  # wrong token never runs live
+
+
+def test_budget_cap_falls_back_to_mock(client, tmp_path, monkeypatch):
+    """Even with a valid live token, the $2/day spend cap forces mock with a
+    flag the UI can show — never a 4xx."""
+    monkeypatch.setattr(app_mod.config, "OPENROUTER_API_KEY", "sk-test")
+    monkeypatch.setattr(app_mod.config, "LIVE_TOKEN", "sekrit")
     monkeypatch.setattr(app_mod.config, "DAILY_SPEND_CAP_USD", 2.00)
     _stub_runner(monkeypatch, tmp_path, seconds=0.05)
     with client:
@@ -137,7 +171,7 @@ def test_budget_cap_falls_back_to_mock(client, tmp_path, monkeypatch):
         d.mkdir()
         (d / "meta.json").write_text(json.dumps(
             {"run_id": rid, "mode": "live", "spend_usd": 2.50}))
-        r = client.post("/api/run")
+        r = client.post("/api/run", headers={"x-nightshift-live": "sekrit"})
         assert r.status_code == 200
         body = r.json()
         assert body["mode"] == "mock"

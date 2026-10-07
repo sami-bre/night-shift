@@ -94,14 +94,13 @@ forces mock-only, `NIGHTSHIFT_DAILY_SPEND_CAP_USD` tunes the daily cap.
 5. **Proof panel** — raw JSONL trace beside the city events it produced, one
    click away (`/api/runs/<id>/trace`).
 
-## Live runs & budget (public deployment)
+## Runs & budget (public deployment)
 
-**Live LLM is the default** — every visitor's "Run the night shift" triggers a
-real OpenRouter run (flash-class, temperature 0, ≈ $0.006/run). A hard
-**$2.00/day spend cap** is enforced server-side from the archived per-run
-spend counters; when the day's budget is exhausted, visitors are switched to
-deterministic mock runs and the page says so
-(`live budget exhausted — showing deterministic replay`). Also enforced:
+**Public visitors always get deterministic mock runs** — real OpenRouter runs
+happen only on explicit demand behind the `NIGHTSHIFT_LIVE_TOKEN` header
+(spend ≈ $0.006/run, flash-class). The live path still carries a hard
+**$2.00/day spend cap** enforced server-side from the archived per-run spend
+counters (fallback: mock + UI notice). Also enforced for everyone:
 1 concurrent run · 10-minute per-IP cooldown · daily live-run count cap.
 Archived runs replay for anyone, forever.
 

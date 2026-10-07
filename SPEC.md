@@ -66,11 +66,11 @@ in the tool description and SPEC rather than hidden.
 3. **No shell tool at all** this time (smaller surface than mcp-ops-agent; the story
    doesn't need one).
 4. **Secrets/filesystem:** tools have no file access; nothing outside the cluster.
-5. **Server-side caps:** 1 concurrent run; per-IP cooldown 10 min; **live-LLM by
-   default with a hard $2.00/day spend cap** enforced server-side from the archived
-   `spend_usd` counters — when the cap is hit, that day's visitors are switched to
-   deterministic mock runs and the UI says so (`live budget exhausted — showing
-   deterministic replay`); trace payloads truncated.
+5. **Server-side caps:** 1 concurrent run; per-IP cooldown 10 min; **public
+   visitors get deterministic mock runs, never live** — live-LLM runs only on
+   explicit demand behind the `NIGHTSHIFT_LIVE_TOKEN` header, with a hard
+   $2.00/day spend cap as a guard on that path (enforced server-side from the
+   archived `spend_usd` counters); trace payloads truncated.
 
 ## 4. Agent graph (LangGraph, ReAct-style)
 
@@ -139,10 +139,12 @@ LLM request/response internals stay in the trace report only.
 
 - `GET /` → `web/` static (city page).
 - `POST /api/run` `{mode: "mock"?}` → starts a run, returns `{run_id, mode,
-  budget_exhausted}`. **Live (real OpenRouter) is the default**; mock is the
-  fallback when limits hit: hard daily spend cap ($2.00/day, tracked from the
-  archived per-run `spend_usd` counters), `NIGHTSHIFT_LIVE_DAILY_CAP` run count,
-  `LIVE_ENABLED=false` master switch, or `mode: "mock"` requested explicitly.
+  budget_exhausted}`. **Public visitors always get mock (deterministic,
+  zero API spend).** Live (real OpenRouter) runs only on explicit demand with
+  the `x-nightshift-live: $NIGHTSHIFT_LIVE_TOKEN` header, and even then fall
+  back to mock when limits hit: hard daily spend cap ($2.00/day, tracked from
+  the archived per-run `spend_usd` counters), `NIGHTSHIFT_LIVE_DAILY_CAP` run
+  count, or `LIVE_ENABLED=false` master switch.
   Rate limits unchanged: 1 concurrent run (503), per-IP cooldown 600s (429).
 - `GET /api/events/{run_id}` → SSE stream of city events (replays the run's archived
   events at their recorded pace if the run is over).

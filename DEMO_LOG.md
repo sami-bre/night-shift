@@ -35,3 +35,16 @@ $27.38 (well above the $3 floor).
   5 tool calls (get → describe pod → patch 128Mi → get → get) with real args
   and durations. Sidebar visually verified in a browser.
 - Live spend today total: $0.0123 (2 runs) + $0.0061 = $0.0184. Well under cap.
+
+## 2026-10-07 (late evening) — mock-revert + sidebar polish + favicon
+
+- REVERTED live-by-default per Samuel: public visitors get deterministic mock
+  runs, never live; live only behind NIGHTSHIFT_LIVE_TOKEN. The $2/day cap and
+  spend logging remain as guards on the token-gated live path. Tests updated
+  (39 passing).
+- Mission-control sidebar: never empty on load — pre-renders the last
+  archived run's tool calls (new GET /api/runs/{id}/agent-feed) marked
+  "previous shift"; live entries append below; stacking breakpoint lowered
+  to 760px with sidebar min-height on stacked layouts.
+- Included web/favicon.svg + <link rel=icon> (Bud's change).
+- No new live spend today beyond the $0.0184 logged above.

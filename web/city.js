@@ -74,11 +74,16 @@ function drawFromSheet(f, x, y, w, h) {
   ctx.drawImage(sheet, f.x, f.y, f.w, f.h, x * S, y * S, w * S, h * S);
 }
 
-function resetForRun(label) {
+function resetForRun(label, dividerText) {
   for (const id of replayTimers) clearTimeout(id);
   replayTimers = [];
   state.skyT = 0; state.skyTarget = 0;
-  document.getElementById("feed").innerHTML = "";
+  if (dividerText) {
+    const li = document.createElement("li");
+    li.className = "divider";
+    li.textContent = dividerText;
+    document.getElementById("feed").appendChild(li);
+  }
   showBudgetNotice(false);
   state.smokeOn = false; state.puffs = []; state.bubbles = [];
   state.relightQueue = 0;
@@ -167,10 +172,12 @@ function bldWidth(key) { return buildingFrame(key).w; }
 // ------------------------------------------------- mission-control sidebar
 function applyAgentEvent(ev) {
   const feed = document.getElementById("feed");
-  let li = document.getElementById("feed-" + ev.agent_seq);
+  const liId = "feed-" + ev.run_id + "-" + ev.agent_seq;
+  let li = document.getElementById(liId);
+  const create = !li;
   if (!li) {
     li = document.createElement("li");
-    li.id = "feed-" + ev.agent_seq;
+    li.id = liId;
     li.innerHTML = '<span class="tool"></span><span class="verdict"></span>'
       + '<span class="dur"></span><span class="args"></span>';
     feed.appendChild(li);
@@ -185,8 +192,8 @@ function applyAgentEvent(ev) {
   const args = ev.args && Object.keys(ev.args).length
     ? JSON.stringify(ev.args) : "{}";
   li.querySelector(".args").textContent = args.length > 120 ? args.slice(0, 117) + "…" : args;
-  while (feed.children.length > 60) feed.removeChild(feed.firstChild);
-  feed.scrollTop = feed.scrollHeight;
+  while (feed.children.length > 80) feed.removeChild(feed.firstChild);
+  if (create) feed.scrollTop = feed.scrollHeight;
 }
 
 function showBudgetNotice(on) {
@@ -242,7 +249,7 @@ async function startRun() {
     const res = await fetch("api/run", { method: "POST" });
     const data = await res.json();
     if (!res.ok) { setStatusLine(data.error); return; }
-    resetForRun(data.budget_exhausted ? "replay" : "live");
+    resetForRun("live", "— new shift starting —");
     if (data.budget_exhausted) {
       showBudgetNotice(true);
       setStatusLine("live budget exhausted — running the deterministic replay instead");
@@ -509,8 +516,26 @@ function loop(ts) {
 // ------------------------------------------------------------------ boot
 window.state = state;  // exposed for tests/screenshots (read-only inspection)
 document.getElementById("runBtn").addEventListener("click", startRun);
-pollStatus().then((d) => {
-  if (d && d.latest_run && !d.active_run) follow(d.latest_run);      // auto-replay last shift
-  else if (d && d.active_run) { resetForRun("live"); follow(d.active_run); }
-});
+async function boot() {
+  const d = await pollStatus();
+  if (!d) return;
+  const rid = d.active_run || d.latest_run;
+  if (!rid) return;
+  // sidebar is NEVER empty on load: pre-render the last run's tool calls
+  try {
+    const res = await fetch(`api/runs/${rid}/agent-feed`);
+    if (res.ok) {
+      const j = await res.json();
+      const feed = document.getElementById("feed");
+      const li = document.createElement("li");
+      li.className = "divider";
+      li.textContent = `previous shift — ${j.run_id}`;
+      feed.appendChild(li);
+      (j.feed || []).forEach(applyAgentEvent);
+    }
+  } catch (e) { /* sidebar stays empty rather than breaking the city */ }
+  if (d.active_run) { resetForRun("live"); follow(d.active_run); }
+  else follow(rid);  // replays the archived run; agent entries update in place
+}
+boot();
 setInterval(pollStatus, 8000);
