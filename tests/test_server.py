@@ -115,33 +115,51 @@ def test_per_ip_cooldown(client, tmp_path, monkeypatch):
         assert "cooldown" in r2.json()["error"]
 
 
-def test_live_disabled_without_token(client, monkeypatch):
-    monkeypatch.setattr(app_mod.config, "LIVE_TOKEN", "")
+def test_live_is_default(client, monkeypatch):
+    monkeypatch.setattr(app_mod.config, "OPENROUTER_API_KEY", "sk-test")
     with client:
-        r = client.post("/api/run", headers={"x-nightshift-live": "whatever"})
-        assert r.status_code == 200  # silently falls back to mock
-        assert r.json()["mode"] == "mock"
+        r = client.post("/api/run")
+        assert r.status_code == 200
+        assert r.json()["mode"] == "live"
+        assert r.json()["budget_exhausted"] is False
 
 
-def test_live_daily_cap(client, tmp_path, monkeypatch):
-    monkeypatch.setattr(app_mod.config, "LIVE_TOKEN", "sekrit")
-    monkeypatch.setattr(app_mod.config, "LIVE_DAILY_CAP", 2)
+def test_budget_cap_falls_back_to_mock(client, tmp_path, monkeypatch):
+    """When today's live spend reaches the cap, visitors get mock + a flag
+    the UI can show — never a 4xx."""
+    monkeypatch.setattr(app_mod.config, "OPENROUTER_API_KEY", "sk-test")
+    monkeypatch.setattr(app_mod.config, "DAILY_SPEND_CAP_USD", 2.00)
     _stub_runner(monkeypatch, tmp_path, seconds=0.05)
-    monkeypatch.setattr(app_mod.config, "IP_COOLDOWN_S", 0)
     with client:
-        for i in range(4):
-            app_mod._state["ip_last"] = {}
-            r = client.post("/api/run", headers={"x-nightshift-live": "sekrit"})
-            if app_mod._state["active_run"] is not None:
-                for _ in range(60):
-                    if app_mod._state["active_run"] is None:
-                        break
-                    time.sleep(0.05)
-            if i < 2:
-                assert r.status_code == 200
-            else:
-                assert r.status_code == 429
-                assert "cap" in r.json()["error"]
+        # a finished live run from TODAY that already burned the cap
+        rid = f"r-{time.strftime('%Y%m%d')}-000000-aaaa"
+        d = tmp_path / rid
+        d.mkdir()
+        (d / "meta.json").write_text(json.dumps(
+            {"run_id": rid, "mode": "live", "spend_usd": 2.50}))
+        r = client.post("/api/run")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["mode"] == "mock"
+        assert body["budget_exhausted"] is True
+
+
+def test_force_mock_mode(client, tmp_path, monkeypatch):
+    monkeypatch.setattr(app_mod.config, "OPENROUTER_API_KEY", "sk-test")
+    _stub_runner(monkeypatch, tmp_path, seconds=0.05)
+    with client:
+        r = client.post("/api/run", json={"mode": "mock"})
+        assert r.status_code == 200
+        assert r.json()["mode"] == "mock"
+        assert r.json()["budget_exhausted"] is False
+
+
+def test_live_disabled_forces_mock(client, monkeypatch):
+    monkeypatch.setattr(app_mod.config, "LIVE_ENABLED", False)
+    with client:
+        r = client.post("/api/run")
+        assert r.status_code == 200
+        assert r.json()["mode"] == "mock"
 
 
 def test_status_endpoint(client, monkeypatch):

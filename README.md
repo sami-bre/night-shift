@@ -56,6 +56,10 @@ from the raw JSONL trace, side-by-side with the city events it produced.
   *really* failing (cluster watcher polls real state every 3s), log bubbles
   contain the *actual* log tails the agent read, dawn only after the recovery
   is *really* confirmed. If the cluster is down, the page says so.
+- **Mission-control sidebar**: every tool call streams live next to the city —
+  tool name, args, verdict (`ok` / `error` / `denied` / `cluster_unavailable`)
+  and wall-clock duration — fed by `type: agent` records on the same SSE stream
+  that drives the city. LLM request/response internals stay in the trace report.
 - **Providers** (`nightshift/llm.py`): `MockLLM` (canned deterministic script,
   zero API spend — the default everywhere) and `OpenRouterLLM` (flash-class,
   temperature 0) for live runs. Live diagnosis is open-ended: the prompt
@@ -68,15 +72,12 @@ git clone https://github.com/sami-bre/night-shift && cd night-shift
 make cluster-up     # docker + k3d + kubectl + the (broken) city — idempotent
 make serve          # FastAPI on 127.0.0.1:8808
 open http://127.0.0.1:8808/   → click "Run the night shift"
-make test           # 33 tests: guards, agent loop, city mapping, SSE, rate limits
+make test           # 38 tests: guards, agent loop, city mapping, tool feed, SSE, budget
 ```
 
-For a live-LLM run (spend ≈ $0.01/run on `google/gemini-3-flash-preview`):
-
-```bash
-export OPENROUTER_API_KEY=sk-...           # demo-runtime key
-export NIGHTSHIFT_LIVE_TOKEN=some-secret   # gate for POST /api/run + header
-```
+For live runs, the backend needs `OPENROUTER_API_KEY` in its environment
+(see `/etc/nightshift.env` on the demo VPS); `NIGHTSHIFT_LIVE_ENABLED=false`
+forces mock-only, `NIGHTSHIFT_DAILY_SPEND_CAP_USD` tunes the daily cap.
 
 ## Scene beats
 
@@ -93,10 +94,15 @@ export NIGHTSHIFT_LIVE_TOKEN=some-secret   # gate for POST /api/run + header
 5. **Proof panel** — raw JSONL trace beside the city events it produced, one
    click away (`/api/runs/<id>/trace`).
 
-## Rate limits (public deployment)
+## Live runs & budget (public deployment)
 
-1 concurrent run · 10-minute per-IP cooldown · live-LLM daily cap · live mode
-requires a server-side token (anonymous visitors always get mock mode).
+**Live LLM is the default** — every visitor's "Run the night shift" triggers a
+real OpenRouter run (flash-class, temperature 0, ≈ $0.006/run). A hard
+**$2.00/day spend cap** is enforced server-side from the archived per-run
+spend counters; when the day's budget is exhausted, visitors are switched to
+deterministic mock runs and the page says so
+(`live budget exhausted — showing deterministic replay`). Also enforced:
+1 concurrent run · 10-minute per-IP cooldown · daily live-run count cap.
 Archived runs replay for anyone, forever.
 
 ## Honest limitations

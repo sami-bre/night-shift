@@ -14,19 +14,27 @@
 </header>
 
 <main>
-  <div id="citywrap">
-    <canvas id="city" width="960" height="540"></canvas>
+  <div id="stage">
+    <div id="citywrap">
+      <canvas id="city" width="960" height="540"></canvas>
 
-    <div id="alertBanner" class="banner alert hidden">
-      <span class="pulse"></span><span id="alertText">P1: payments-api failing</span>
+      <div id="alertBanner" class="banner alert hidden">
+        <span class="pulse"></span><span id="alertText">P1: payments-api failing</span>
+      </div>
+
+      <div id="resolveBanner" class="banner resolved hidden">
+        <span id="resolveText"></span>
+        <a id="traceLink" href="#" target="_blank" rel="noopener">view the full trace &rarr;</a>
+      </div>
+
+      <div id="replayTag" class="replay-tag hidden">replay &mdash; recorded run, time-compressed</div>
     </div>
 
-    <div id="resolveBanner" class="banner resolved hidden">
-      <span id="resolveText"></span>
-      <a id="traceLink" href="#" target="_blank" rel="noopener">view the full trace &rarr;</a>
-    </div>
-
-    <div id="replayTag" class="replay-tag hidden">replay &mdash; recorded run, time-compressed</div>
+    <aside id="sidebar">
+      <h3>mission control</h3>
+      <div id="budgetNote" class="budget-note hidden">live budget exhausted &mdash; showing deterministic replay</div>
+      <ul id="feed"></ul>
+    </aside>
   </div>
 
   <div id="controls">

@@ -19,7 +19,12 @@ def ev(seq, event, payload):
 
 
 def city_names(run):
-    return [c["city_event"] for c in run.read_city_events()]
+    return [c["city_event"] for c in run.read_city_events()
+            if c.get("type") == "city"]
+
+
+def feed_records(run):
+    return [c for c in run.read_city_events() if c.get("type") == "agent"]
 
 
 def test_smoke_on_real_failure_only_once(tmp_path):
@@ -49,7 +54,8 @@ def test_logs_tool_result_produces_bubbles_with_real_lines(tmp_path):
     m.handle(ev(2, "tool_result", {"tool": "kubectl_logs", "ok": True,
                                    "result": "[boot] payments-api starting\n"
                                              "[boot] allocating payments cache (64 MB)\n"}))
-    bubbles = [c for c in run.read_city_events() if c["city_event"] == "log_bubble"]
+    bubbles = [c for c in run.read_city_events()
+               if c.get("city_event") == "log_bubble"]
     assert [b["data"]["line"] for b in bubbles] == [
         "[boot] payments-api starting", "[boot] allocating payments cache (64 MB)"]
 
@@ -99,10 +105,54 @@ def test_seq_dedup_no_double_city_events(tmp_path):
 def test_guard_denied_maps_to_city(tmp_path):
     run = make_run(tmp_path)
     m = CityMapper(run)
-    m.handle(ev(1, "guard_denied", {"tool": "kubectl_patch_limits",
+    m.handle(ev(1, "tool_call", {"tool": "kubectl_patch_limits", "args": {"memory_limit": "9999Mi"}}))
+    m.handle(ev(2, "guard_denied", {"tool": "kubectl_patch_limits",
                                     "reason": "GUARD DENIED: out of range"}))
-    denied = [c for c in run.read_city_events() if c["city_event"] == "guard_denied"]
+    denied = [c for c in run.read_city_events() if c.get("city_event") == "guard_denied"]
     assert denied and "out of range" in denied[0]["data"]["reason"]
+
+
+def test_tool_feed_entries_track_call_to_result(tmp_path):
+    run = make_run(tmp_path)
+    m = CityMapper(run)
+    m.handle(ev(1, "tool_call", {"tool": "kubectl_logs",
+                                 "args": {"pod": "payments-api-x", "tail": 10}}))
+    m.handle(ev(2, "tool_result", {"tool": "kubectl_logs", "ok": True,
+                                   "result": "[boot] payments-api starting\n"}))
+    feed = feed_records(run)
+    assert len(feed) == 2
+    assert feed[0]["verdict"] == "running" and feed[0]["duration_ms"] is None
+    assert feed[1]["verdict"] == "ok"
+    assert feed[1]["duration_ms"] == 100  # elapsed 200 - 100
+    assert feed[1]["args"] == {"pod": "payments-api-x", "tail": 10}
+    assert feed[1]["agent_seq"] == 1  # linked to the tool_call line
+
+
+def test_tool_feed_verdicts(tmp_path):
+    run = make_run(tmp_path)
+    m = CityMapper(run)
+    m.handle(ev(1, "tool_call", {"tool": "kubectl_get", "args": {}}))
+    m.handle(ev(2, "tool_result", {"tool": "kubectl_get", "ok": False,
+                                   "error": "cluster_unavailable: connection refused"}))
+    feed = feed_records(run)
+    assert feed[-1]["verdict"] == "cluster_unavailable"
+
+    run2 = make_run(tmp_path)
+    m2 = CityMapper(run2)
+    m2.handle(ev(1, "tool_call", {"tool": "kubectl_patch_limits", "args": {}}))
+    m2.handle(ev(2, "tool_result", {"tool": "kubectl_patch_limits", "ok": False,
+                                    "error": "kubectl failed: pod not found"}))
+    assert feed_records(run2)[-1]["verdict"] == "error"
+
+
+def test_denied_tool_closes_feed_as_denied(tmp_path):
+    run = make_run(tmp_path)
+    m = CityMapper(run)
+    m.handle(ev(1, "tool_call", {"tool": "kubectl_delete", "args": {}}))
+    m.handle(ev(2, "guard_denied", {"tool": "kubectl_delete", "reason": "unknown tool"}))
+    feed = feed_records(run)
+    assert feed[-1]["verdict"] == "denied"
+    assert feed[-1]["duration_ms"] == 100
 
 
 def test_snapshot_shape():

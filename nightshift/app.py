@@ -49,17 +49,35 @@ def _rate_check(ip: str, live: bool) -> tuple[bool, str, int]:
         wait = int(config.IP_COOLDOWN_S - (time.monotonic() - last))
         return False, (f"cooldown: each visitor can start a run every "
                        f"{config.IP_COOLDOWN_S}s (next in {wait}s)"), 429
-    today = time.strftime("%Y%m%d")
-    if _state["live_count"]["day"] != today:
-        _state["live_count"] = {"day": today, "n": 0}
-    if live:
-        if not config.LIVE_TOKEN:
-            return False, "live mode is disabled on this deployment", 403
-        if _state["live_count"]["n"] >= config.LIVE_DAILY_CAP:
-            return False, ("daily live-run cap reached — the city still runs in "
-                           "mock mode"), 429
-        _state["live_count"]["n"] += 1
     return True, "", 200
+
+
+def _today_live_spend() -> float:
+    """Completed live-run spend for today, from the archived run metas."""
+    total = 0.0
+    today = time.strftime("%Y%m%d")
+    if config.RUNS_DIR.exists():
+        for meta_path in config.RUNS_DIR.glob("*/meta.json"):
+            try:
+                meta = json.loads(meta_path.read_text())
+                rid = str(meta.get("run_id", ""))
+                if meta.get("mode") == "live" and rid[2:10] == today:
+                    total += float(meta.get("spend_usd", 0) or 0)
+            except Exception:
+                continue
+    return total
+
+
+def _decide_mode(requested_mock: bool) -> tuple[str, bool]:
+    """Live is the default; mock is the fallback when limits hit.
+    Returns (mode, budget_exhausted)."""
+    if requested_mock:
+        return "mock", False
+    if (not config.LIVE_ENABLED or not config.OPENROUTER_API_KEY
+            or _today_live_spend() >= config.DAILY_SPEND_CAP_USD
+            or _state["live_count"]["n"] >= config.LIVE_DAILY_CAP):
+        return "mock", True
+    return "live", False
 
 
 async def _run_wrapper(run_id: str, mode: str) -> None:
@@ -81,18 +99,32 @@ async def _run_wrapper(run_id: str, mode: str) -> None:
 @app.post("/api/run")
 async def api_run(request: Request):
     ip = request.client.host if request.client else "?"
-    live = (config.LIVE_TOKEN
-            and request.headers.get("x-nightshift-live", "") == config.LIVE_TOKEN)
-    ok, reason, code = _rate_check(ip, live=bool(live))
+    requested_mock = False
+    try:
+        body = await request.json()
+        if isinstance(body, dict) and body.get("mode") == "mock":
+            requested_mock = True
+    except Exception:
+        pass
+    if request.headers.get("x-nightshift-mode") == "mock":
+        requested_mock = True
+
+    mode, budget_exhausted = _decide_mode(requested_mock)
+    if mode == "live":
+        today = time.strftime("%Y%m%d")
+        if _state["live_count"]["day"] != today:
+            _state["live_count"] = {"day": today, "n": 0}
+        _state["live_count"]["n"] += 1
+    ok, reason, code = _rate_check(ip, live=(mode == "live"))
     if not ok:
         return JSONResponse({"error": reason}, status_code=code)
     _state["ip_last"][ip] = time.monotonic()
 
     run_id = new_run_id()
-    mode = "live" if live else "mock"
     _state["active_run"] = run_id
     asyncio.create_task(_run_wrapper(run_id, mode))
-    return JSONResponse({"run_id": run_id, "mode": mode})
+    return JSONResponse({"run_id": run_id, "mode": mode,
+                         "budget_exhausted": budget_exhausted})
 
 
 @app.get("/api/status")

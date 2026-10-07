@@ -62,6 +62,15 @@ def _block(rec: dict, cls: str) -> str:
 
 
 def _city_block(rec: dict) -> str:
+    if rec.get("type") == "agent":
+        deriv = f" ← agent#{rec.get('agent_seq')} ({rec.get('verdict')})"
+        payload = {"tool": rec.get("tool"), "args": rec.get("args"),
+                   "verdict": rec.get("verdict"), "duration_ms": rec.get("duration_ms")}
+        return (f'<div class="ev city">'
+                f'<span class="seq">#{rec.get("seq", "?")} @{rec.get("elapsed_ms", 0)}ms</span> '
+                f'<span style="color:#ffd75e">tool: {html.escape(str(rec.get("tool")))}</span> '
+                f'<span class="arrow">{html.escape(deriv)}</span>'
+                f'<pre>{html.escape(json.dumps(payload, ensure_ascii=False))}</pre></div>')
     linked = f' data-agent-seq="{rec.get("agent_seq")}"' if rec.get("agent_seq") else ""
     why = rec.get("why", "")
     aseq = rec.get("agent_seq")

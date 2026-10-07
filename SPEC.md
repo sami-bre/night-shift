@@ -66,8 +66,11 @@ in the tool description and SPEC rather than hidden.
 3. **No shell tool at all** this time (smaller surface than mcp-ops-agent; the story
    doesn't need one).
 4. **Secrets/filesystem:** tools have no file access; nothing outside the cluster.
-5. **Server-side caps:** 1 concurrent run; per-IP cooldown 10 min; hard daily cap on
-   live-LLM runs (mock default for anonymous visitors); trace payloads truncated.
+5. **Server-side caps:** 1 concurrent run; per-IP cooldown 10 min; **live-LLM by
+   default with a hard $2.00/day spend cap** enforced server-side from the archived
+   `spend_usd` counters — when the cap is hit, that day's visitors are switched to
+   deterministic mock runs and the UI says so (`live budget exhausted — showing
+   deterministic replay`); trace payloads truncated.
 
 ## 4. Agent graph (LangGraph, ReAct-style)
 
@@ -118,13 +121,29 @@ Mapping table (frontend implements exactly these):
 | `run_finish` (no recovery / error) | `resolved_failed` | honest banner: what ended the run |
 | `cluster_state` unreachable | `cluster_down` | status line "cluster down — demo degraded honestly" |
 
+### Mission-control feed (type=agent records, same SSE stream)
+
+Each `tool_call` opens a sidebar entry (`running…`), closed by its `tool_result`
+or `guard_denied` with the real wall-clock duration:
+
+| trace source | feed record | sidebar |
+| --- | --- | --- |
+| `tool_call` | `{type: agent, tool, args, verdict: "running"}` | new entry: tool name + args |
+| `tool_result` ok | verdict `ok` | green verdict + duration ms |
+| `tool_result` error | verdict `error` / `cluster_unavailable` | amber/blue verdict + error detail |
+| `guard_denied` | verdict `denied` | red entry + reason |
+
+LLM request/response internals stay in the trace report only.
+
 ## 6. Server (FastAPI, port 8808 on localhost)
 
 - `GET /` → `web/` static (city page).
-- `POST /api/run` `{mode: "mock"|"live"}` → starts a run, returns `{run_id}`.
-  Rate limits: 1 concurrent run (503 otherwise), per-IP cooldown 600s, live daily cap
-  (`NIGHTSHIFT_LIVE_DAILY_CAP`, default 20), anonymous visitors default to mock;
-  live requires the `X-NightShift-Live` token from the env file (Samuel's control).
+- `POST /api/run` `{mode: "mock"?}` → starts a run, returns `{run_id, mode,
+  budget_exhausted}`. **Live (real OpenRouter) is the default**; mock is the
+  fallback when limits hit: hard daily spend cap ($2.00/day, tracked from the
+  archived per-run `spend_usd` counters), `NIGHTSHIFT_LIVE_DAILY_CAP` run count,
+  `LIVE_ENABLED=false` master switch, or `mode: "mock"` requested explicitly.
+  Rate limits unchanged: 1 concurrent run (503), per-IP cooldown 600s (429).
 - `GET /api/events/{run_id}` → SSE stream of city events (replays the run's archived
   events at their recorded pace if the run is over).
 - `GET /api/status` → real cluster snapshot for the status line.
@@ -139,7 +158,10 @@ Mapping table (frontend implements exactly these):
   smoke puffs — so the art is reproducible from code with provenance. Committed.
 - `web/city.js`: canvas state machine `idle → alert → respond → dawn`; star field,
   twinkling windows, day/night sky gradient interpolation; SSE consumer applying city
-  events; status line fed by `/api/status` (real cluster state).
+  events; **mission-control sidebar** streaming every tool call live (tool, args,
+  verdict ok/error/denied/cluster_unavailable, duration ms) fed by `type: agent`
+  records on the same SSE stream; status line fed by `/api/status` (real cluster
+  state).
 - On load with no active run, the page auto-replays the latest archived run (instant
   wow for a visitor; every replay is a replay of real events, labeled as such).
 

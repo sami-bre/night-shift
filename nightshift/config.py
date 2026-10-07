@@ -20,9 +20,14 @@ MAX_STEPS = int(os.environ.get("NIGHTSHIFT_MAX_STEPS", "10"))
 
 SERVER_PORT = int(os.environ.get("NIGHTSHIFT_PORT", "8808"))
 
+# live-mode policy: live is the DEFAULT for visitors; mock is the fallback
+# when limits hit. LIVE_ENABLED=false forces mock for everyone.
+LIVE_ENABLED = os.environ.get("NIGHTSHIFT_LIVE_ENABLED", "true").lower() != "false"
+DAILY_SPEND_CAP_USD = float(os.environ.get("NIGHTSHIFT_DAILY_SPEND_CAP_USD", "2.00"))
+
 # rate limiting / caps
 LIVE_DAILY_CAP = int(os.environ.get("NIGHTSHIFT_LIVE_DAILY_CAP", "20"))
-LIVE_TOKEN = os.environ.get("NIGHTSHIFT_LIVE_TOKEN", "")  # empty = live runs disabled
+LIVE_TOKEN = os.environ.get("NIGHTSHIFT_LIVE_TOKEN", "")  # optional: force-mock switch
 IP_COOLDOWN_S = int(os.environ.get("NIGHTSHIFT_IP_COOLDOWN_S", "600"))
 
 PRICES_PER_TOKEN = {"in": 0.50 / 1e6, "out": 3.00 / 1e6}  # google/gemini-3-flash-preview

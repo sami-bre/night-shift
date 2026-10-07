@@ -78,6 +78,8 @@ function resetForRun(label) {
   for (const id of replayTimers) clearTimeout(id);
   replayTimers = [];
   state.skyT = 0; state.skyTarget = 0;
+  document.getElementById("feed").innerHTML = "";
+  showBudgetNotice(false);
   state.smokeOn = false; state.puffs = []; state.bubbles = [];
   state.relightQueue = 0;
   state.repair = { x: plant().x + 20, y: GROUND_Y, state: "idle", frame: 0, ft: 0, hammerLeft: 0 };
@@ -88,6 +90,7 @@ function resetForRun(label) {
 
 // ------------------------------------------------------- city events in
 function applyCityEvent(ev) {
+  if (ev.type === "agent") { applyAgentEvent(ev); return; }
   const b = bank();
   switch (ev.city_event) {
     case "agent_wake":
@@ -161,6 +164,35 @@ function applyCityEvent(ev) {
 
 function bldWidth(key) { return buildingFrame(key).w; }
 
+// ------------------------------------------------- mission-control sidebar
+function applyAgentEvent(ev) {
+  const feed = document.getElementById("feed");
+  let li = document.getElementById("feed-" + ev.agent_seq);
+  if (!li) {
+    li = document.createElement("li");
+    li.id = "feed-" + ev.agent_seq;
+    li.innerHTML = '<span class="tool"></span><span class="verdict"></span>'
+      + '<span class="dur"></span><span class="args"></span>';
+    feed.appendChild(li);
+  }
+  li.className = ev.verdict;
+  li.querySelector(".tool").textContent = ev.tool;
+  const v = li.querySelector(".verdict");
+  v.className = "verdict verdict-" + ev.verdict;
+  v.textContent = ev.verdict === "running" ? "…" : ev.verdict;
+  li.querySelector(".dur").textContent =
+    ev.duration_ms != null ? ev.duration_ms + "ms" : "";
+  const args = ev.args && Object.keys(ev.args).length
+    ? JSON.stringify(ev.args) : "{}";
+  li.querySelector(".args").textContent = args.length > 120 ? args.slice(0, 117) + "…" : args;
+  while (feed.children.length > 60) feed.removeChild(feed.firstChild);
+  feed.scrollTop = feed.scrollHeight;
+}
+
+function showBudgetNotice(on) {
+  document.getElementById("budgetNote").classList.toggle("hidden", !on);
+}
+
 // ------------------------------------------------------------- SSE wiring
 let currentES = null;   // only one live stream at a time
 let replayMode = false;
@@ -210,7 +242,11 @@ async function startRun() {
     const res = await fetch("api/run", { method: "POST" });
     const data = await res.json();
     if (!res.ok) { setStatusLine(data.error); return; }
-    resetForRun("live");
+    resetForRun(data.budget_exhausted ? "replay" : "live");
+    if (data.budget_exhausted) {
+      showBudgetNotice(true);
+      setStatusLine("live budget exhausted — running the deterministic replay instead");
+    }
     state.banner = null;
     document.getElementById("replayTag").classList.add("hidden");
     follow(data.run_id);

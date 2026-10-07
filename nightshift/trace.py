@@ -87,6 +87,37 @@ class Run:
         return [json.loads(ln) for ln in self.city_path.read_text().splitlines()
                 if ln.strip()]
 
+    # -- agent feed (tool calls, surfaced live in the sidebar) -------------
+
+    def emit_agent(self, tool: str, args: dict, verdict: str, ok: bool,
+                   duration_ms: int | None = None, agent_seq: int | None = None,
+                   detail: str = "") -> dict:
+        """Append a tool-feed record to the shared event stream (type=agent so
+        the proof page can render it separately) and fan out to SSE."""
+        self._city_seq += 1
+        rec = {
+            "seq": self._city_seq,
+            "elapsed_ms": int((time.monotonic() - self._t0) * 1000),
+            "run_id": self.run_id,
+            "type": "agent",
+            "v": 1,
+            "agent_seq": agent_seq,
+            "tool": tool,
+            "args": args,
+            "verdict": verdict,
+            "ok": ok,
+            "duration_ms": duration_ms,
+            "detail": detail[:200],
+        }
+        with self.city_path.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
+        for q in list(self.subscribers):
+            try:
+                q.put_nowait(rec)
+            except Exception:
+                pass
+        return rec
+
     def write_meta(self, **meta) -> None:
         meta.update({"run_id": self.run_id, "mode": self.mode})
         (self.dir / "meta.json").write_text(json.dumps(meta, indent=1))

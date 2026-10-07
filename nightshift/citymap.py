@@ -40,6 +40,7 @@ class CityMapper:
         self.tool_calls = 0
         self.patched = False
         self.finish_info: dict | None = None
+        self.pending_call: dict | None = None  # the open tool_call for the feed
 
     def handle(self, rec: dict) -> None:
         """Feed one trace event; safe to re-feed (deduped by seq)."""
@@ -80,6 +81,10 @@ class CityMapper:
         self.last_tool = rec
         self.last_result = None
         tool = rec["payload"]["tool"]
+        self.pending_call = rec
+        # mission-control feed: entry appears as "running" now, finalizes on result
+        self.run.emit_agent(tool=tool, args=rec["payload"].get("args", {}),
+                            verdict="running", ok=None, agent_seq=rec["seq"])
         if tool == "kubectl_get":
             self.run.emit_city("townhall_light", building="town_hall",
                                why="tool_call", agent_seq=rec["seq"], tool=tool)
@@ -96,6 +101,7 @@ class CityMapper:
         tool = rec["payload"]["tool"]
         ok = rec["payload"].get("ok")
         self.tool_calls += 1
+        self._finalize_feed(rec, tool, ok)
         if tool == "kubectl_logs" and ok:
             lines = self._log_lines(rec["payload"])
             for i, line in enumerate(lines):
@@ -107,9 +113,34 @@ class CityMapper:
         self.last_result = rec
 
     def on_guard_denied(self, rec: dict) -> None:
+        self._finalize_feed(rec, rec["payload"].get("tool", "?"), None,
+                            denied=True)
         self.run.emit_city("guard_denied", building="bank", why="guard_denied",
                            agent_seq=rec["seq"], tool=rec["payload"].get("tool"),
                            reason=rec["payload"].get("reason", ""))
+
+    def _finalize_feed(self, rec: dict, tool: str, ok, denied: bool = False) -> None:
+        """Close the sidebar entry opened by the matching tool_call."""
+        started = self.pending_call or {
+            "seq": rec["seq"], "payload": {"tool": tool, "args": {}},
+            "elapsed_ms": rec["elapsed_ms"]}
+        self.pending_call = None
+        if started["payload"].get("tool") != tool:
+            started = {"seq": rec["seq"], "payload": {"tool": tool, "args": {}},
+                       "elapsed_ms": rec["elapsed_ms"]}
+        duration = max(0, rec["elapsed_ms"] - started["elapsed_ms"])
+        error = rec["payload"].get("error") or ""
+        if denied:
+            verdict = "denied"
+        elif ok:
+            verdict = "ok"
+        elif error.startswith("cluster_unavailable"):
+            verdict = "cluster_unavailable"
+        else:
+            verdict = "error"
+        self.run.emit_agent(tool=tool, args=started["payload"].get("args", {}),
+                            verdict=verdict, ok=bool(ok), duration_ms=duration,
+                            agent_seq=started["seq"], detail=error or "")
 
     def on_run_finish(self, rec: dict) -> None:
         # the agent's own end is remembered; the CITY resolves only after the
