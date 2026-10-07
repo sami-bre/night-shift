@@ -74,16 +74,11 @@ function drawFromSheet(f, x, y, w, h) {
   ctx.drawImage(sheet, f.x, f.y, f.w, f.h, x * S, y * S, w * S, h * S);
 }
 
-function resetForRun(label, dividerText) {
+function resetForRun(label) {
   for (const id of replayTimers) clearTimeout(id);
   replayTimers = [];
   state.skyT = 0; state.skyTarget = 0;
-  if (dividerText) {
-    const li = document.createElement("li");
-    li.className = "divider";
-    li.textContent = dividerText;
-    document.getElementById("feed").appendChild(li);
-  }
+  document.getElementById("feed").innerHTML = "";  // only the current run's calls
   showBudgetNotice(false);
   state.smokeOn = false; state.puffs = []; state.bubbles = [];
   state.relightQueue = 0;
@@ -225,6 +220,7 @@ function follow(runId) {
   es.addEventListener("done", () => {
     es.close();
     if (currentES === es) currentES = null;
+    document.getElementById("runBtn").disabled = false;  // run finished
     if (replayMode && replayEvents.length) {
       // archived run: re-render compressed, honestly labeled as replay
       resetForRun("replay");
@@ -239,7 +235,7 @@ function follow(runId) {
     }
     replayEvents = [];
   });
-  es.onerror = () => es.close();
+  es.onerror = () => { es.close(); document.getElementById("runBtn").disabled = false; };
 }
 
 async function startRun() {
@@ -248,19 +244,18 @@ async function startRun() {
   try {
     const res = await fetch("api/run", { method: "POST" });
     const data = await res.json();
-    if (!res.ok) { setStatusLine(data.error); return; }
-    resetForRun("live", "— new shift starting —");
+    if (!res.ok) { btn.disabled = false; setStatusLine(data.error); return; }
+    resetForRun("live");
     if (data.budget_exhausted) {
       showBudgetNotice(true);
       setStatusLine("live budget exhausted — running the deterministic replay instead");
     }
     state.banner = null;
     document.getElementById("replayTag").classList.add("hidden");
-    follow(data.run_id);
+    follow(data.run_id);  // button stays disabled until run_finish
   } catch (e) {
+    btn.disabled = false;
     setStatusLine("could not reach the server");
-  } finally {
-    setTimeout(() => { btn.disabled = false; }, 3000);
   }
 }
 
@@ -520,22 +515,56 @@ async function boot() {
   const d = await pollStatus();
   if (!d) return;
   const rid = d.active_run || d.latest_run;
-  if (!rid) return;
   // sidebar is NEVER empty on load: pre-render the last run's tool calls
-  try {
-    const res = await fetch(`api/runs/${rid}/agent-feed`);
-    if (res.ok) {
-      const j = await res.json();
-      const feed = document.getElementById("feed");
-      const li = document.createElement("li");
-      li.className = "divider";
-      li.textContent = `previous shift — ${j.run_id}`;
-      feed.appendChild(li);
-      (j.feed || []).forEach(applyAgentEvent);
-    }
-  } catch (e) { /* sidebar stays empty rather than breaking the city */ }
-  if (d.active_run) { resetForRun("live"); follow(d.active_run); }
-  else follow(rid);  // replays the archived run; agent entries update in place
+  if (d.latest_run) {
+    try {
+      const res = await fetch(`api/runs/${d.latest_run}/agent-feed`);
+      if (res.ok) {
+        const j = await res.json();
+        const feed = document.getElementById("feed");
+        const li = document.createElement("li");
+        li.className = "divider";
+        li.textContent = `previous shift — ${j.run_id}`;
+        feed.appendChild(li);
+        (j.feed || []).forEach(applyAgentEvent);
+      }
+    } catch (e) { /* sidebar stays empty rather than breaking the city */ }
+  }
+  if (d.active_run) { resetForRun("live"); follow(d.active_run); return; }
+  // the city mirrors the REAL cluster on load: broken if the incident app is
+  // failing (the resting state), healthy right after a recovery
+  applyRealState(d, true);
 }
+
+function clusterBroken(d) {
+  return !d.cluster_ok
+    || (d.pods && d.pods.payments_api && d.pods.payments_api !== "Running")
+    || (d.pods && d.pods["payments-api"] && d.pods["payments-api"] !== "Running");
+}
+
+function applyRealState(d, initial) {
+  if (d.active_run && currentES) return;  // a run is being followed; it drives the city
+  if (clusterBroken(d)) {
+    if (initial || !state.banner || state.banner.kind !== "alert") {
+      state.smokeOn = true;
+      state.skyTarget = 0;
+      state.banner = { kind: "alert",
+        text: d.cluster_ok
+          ? "P1: payments-api failing — incident in progress, waiting for the agent"
+          : "cluster down — demo degraded honestly" };
+    }
+  } else {
+    // genuinely healthy (right after a fix): show it healthy until the
+    // incident timer re-breaks the app
+    state.smokeOn = false;
+    if (state.banner && state.banner.kind === "alert") state.banner = null;
+  }
+}
+
 boot();
-setInterval(pollStatus, 8000);
+setInterval(async () => {
+  const d = await pollStatus();
+  if (!d) return;
+  if (!d.active_run) document.getElementById("runBtn").disabled = false;
+  applyRealState(d, false);
+}, 8000);

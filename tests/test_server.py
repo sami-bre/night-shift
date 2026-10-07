@@ -66,6 +66,16 @@ def test_sse_unknown_run_404(client):
     assert r.status_code == 404
 
 
+def test_should_restage_logic(client, monkeypatch):
+    from nightshift.app import _should_restage
+    app_mod._state["active_run"] = "r-x"
+    assert _should_restage({"cluster_ok": True, "pods": {"payments-api": "Running"}}) is False
+    app_mod._state["active_run"] = None
+    assert _should_restage({"cluster_ok": True, "pods": {"payments-api": "Running"}}) is True
+    assert _should_restage({"cluster_ok": True, "pods": {"payments-api": "CrashLoopBackOff"}}) is False
+    assert _should_restage({"cluster_ok": False, "pods": {"payments-api": "Running"}}) is False
+
+
 def test_agent_feed_endpoint(client, tmp_path):
     rid = seed_run(tmp_path)
     # the seeded run has no tool calls yet; append one agent record

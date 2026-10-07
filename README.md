@@ -56,6 +56,12 @@ from the raw JSONL trace, side-by-side with the city events it produced.
   *really* failing (cluster watcher polls real state every 3s), log bubbles
   contain the *actual* log tails the agent read, dawn only after the recovery
   is *really* confirmed. If the cluster is down, the page says so.
+- **Real state on load**: the page queries `/api/status` and mirrors the real
+  cluster — broken (bank smoking/flickering, P1 banner, "waiting for the
+  agent") while `payments-api` is actually crash-looping, healthy right after
+  a recovery. An incident timer re-breaks the app 10 min after a recovery
+  (`NIGHTSHIFT_INCIDENT_RESET_S`), so the demo's resting state is always a
+  live incident.
 - **Mission-control sidebar**: every tool call streams live next to the city —
   tool name, args, verdict (`ok` / `error` / `denied` / `cluster_unavailable`)
   and wall-clock duration — fed by `type: agent` records on the same SSE stream

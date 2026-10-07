@@ -29,5 +29,8 @@ DAILY_SPEND_CAP_USD = float(os.environ.get("NIGHTSHIFT_DAILY_SPEND_CAP_USD", "2.
 LIVE_DAILY_CAP = int(os.environ.get("NIGHTSHIFT_LIVE_DAILY_CAP", "20"))
 LIVE_TOKEN = os.environ.get("NIGHTSHIFT_LIVE_TOKEN", "")  # optional: force-mock switch
 IP_COOLDOWN_S = int(os.environ.get("NIGHTSHIFT_IP_COOLDOWN_S", "600"))
+# resting state is a broken incident: if the app recovered and no run is
+# active, the timer re-breaks it after this many seconds (0 disables)
+INCIDENT_RESET_S = int(os.environ.get("NIGHTSHIFT_INCIDENT_RESET_S", "600"))
 
 PRICES_PER_TOKEN = {"in": 0.50 / 1e6, "out": 3.00 / 1e6}  # google/gemini-3-flash-preview

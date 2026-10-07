@@ -15,6 +15,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from nightshift import config
+from nightshift import tools as T
 from nightshift.citymap import pod_status_snapshot
 from nightshift.proof import render_proof_page
 from nightshift.runner import execute_run
@@ -211,6 +212,32 @@ async def api_trace(run_id: str):
     if not run_dir.is_dir():
         return JSONResponse({"error": "no such run"}, status_code=404)
     return HTMLResponse(render_proof_page(Run.load(run_id)))
+
+
+def _should_restage(snap: dict) -> bool:
+    """True when the incident app has recovered and no run is active — the
+    timer then re-breaks it so the demo's resting state is a live incident."""
+    if _state["active_run"] is not None:
+        return False
+    if not snap.get("cluster_ok"):
+        return False
+    return snap.get("pods", {}).get(config.INCIDENT_APP) == "Running"
+
+
+async def _incident_timer() -> None:
+    while config.INCIDENT_RESET_S > 0:
+        await asyncio.sleep(config.INCIDENT_RESET_S)
+        try:
+            snap = await asyncio.to_thread(pod_status_snapshot)
+            if _should_restage(snap):
+                await asyncio.to_thread(T.ensure_incident)
+        except Exception:
+            continue  # degraded cluster / missing kubectl: retry next tick
+
+
+@app.on_event("startup")
+async def _start_incident_timer() -> None:
+    asyncio.create_task(_incident_timer())
 
 
 app.mount("/", StaticFiles(directory=config.WEB_DIR, html=True), name="web")

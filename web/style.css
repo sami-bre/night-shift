@@ -30,9 +30,9 @@ h1 {
 }
 .sub { color: var(--dim); font-size: .8rem; margin: .3rem 0 0; }
 
-main { width: min(1180px, 97vw); }
+main { width: min(1240px, 97vw); }
 
-#stage { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 10px; }
+#stage { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 10px; }
 
 #citywrap { position: relative; }
 #city {
