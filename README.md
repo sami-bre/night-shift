@@ -1,7 +1,7 @@
 # The Night Shift
 
 <p align="center">
-  <img src="docs/hero.gif" alt="The Night Shift — an AI agent heals a crashing service, rendered as a pixel-art city" width="720">
+  <img src="assets/hero.gif" alt="The Night Shift — an AI agent heals a crashing service, rendered as a pixel-art city" width="720">
 </p>
 
 > **Watch an AI agent get paged at 3 AM, diagnose a crashing service on a real
