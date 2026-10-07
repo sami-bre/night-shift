@@ -1,0 +1,11 @@
+line-length = 96
+target-version = "py312"
+
+[lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+ignore = [
+  "E501",  # long lines allowed in pixel-art data and prompt strings
+]
+
+[lint.per-file-ignores]
+"tests/*" = ["B011"]

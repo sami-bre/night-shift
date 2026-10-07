@@ -1,0 +1,11 @@
+# secrets & runtime state never get committed
+.env
+*.env
+runs/
+.venv/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+docs/screenshots/burst/
+*.log
+!k3d/manifests/*.yaml

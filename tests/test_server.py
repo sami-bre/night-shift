@@ -1,0 +1,154 @@
+"""Server tests: run archive, SSE smoke, rate limiting (monkeypatched runner)."""
+
+import asyncio
+import json
+import sys
+import time
+from pathlib import Path
+
+import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from fastapi.testclient import TestClient  # noqa: E402
+
+from nightshift import app as app_mod  # noqa: E402
+from nightshift import config  # noqa: E402
+
+
+@pytest.fixture()
+def client(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "RUNS_DIR", tmp_path)
+    monkeypatch.setattr(app_mod.config, "RUNS_DIR", tmp_path)
+    app_mod._state["active_run"] = None
+    app_mod._state["ip_last"] = {}
+    app_mod._state["live_count"] = {"day": "x", "n": 0}
+    return TestClient(app_mod.app)
+
+
+def seed_run(tmp_path, run_id="r-test", done=True):
+    d = tmp_path / run_id
+    d.mkdir(parents=True, exist_ok=True)
+    events = [
+        {"seq": 1, "elapsed_ms": 0, "run_id": run_id, "type": "city", "v": 1,
+         "city_event": "agent_wake", "building": "power_plant", "why": "run_start",
+         "agent_seq": 1, "data": {}},
+        {"seq": 2, "elapsed_ms": 500, "run_id": run_id, "type": "city", "v": 1,
+         "city_event": "smoke_start", "building": "bank", "why": "cluster_state",
+         "agent_seq": 4, "data": {"status": "OOMKilled"}},
+        {"seq": 3, "elapsed_ms": 900, "run_id": run_id, "type": "city", "v": 1,
+         "city_event": "resolved", "building": "", "why": "recovery_confirmed",
+         "agent_seq": None, "data": {"duration_s": 9.0, "tool_calls": 5, "spend_usd": 0.0}},
+    ]
+    (d / "city_events.jsonl").write_text("\n".join(json.dumps(e) for e in events) + "\n")
+    (d / "trace.jsonl").write_text(json.dumps(
+        {"seq": 1, "elapsed_ms": 0, "run_id": run_id, "event": "run_start",
+         "node": "", "payload": {}}) + "\n")
+    (d / "meta.json").write_text(json.dumps({"run_id": run_id, "mode": "mock",
+                                             "recovered": True}))
+    if not done:
+        (d / ".active").write_text("1")
+    return run_id
+
+
+def test_sse_replays_archived_run_and_finishes(client, tmp_path):
+    rid = seed_run(tmp_path)
+    with client.stream("GET", f"/api/events/{rid}") as r:
+        assert r.status_code == 200
+        body = "".join(chunk for chunk in r.iter_text())
+    assert "event: city" in body
+    assert "smoke_start" in body and "resolved" in body
+    assert "event: done" in body
+
+
+def test_sse_unknown_run_404(client):
+    r = client.get("/api/events/nope")
+    assert r.status_code == 404
+
+
+def test_proof_page_renders_both_columns(client, tmp_path):
+    rid = seed_run(tmp_path)
+    r = client.get(f"/api/runs/{rid}/trace")
+    assert r.status_code == 200
+    assert "Agent trace" in r.text and "City events" in r.text
+    assert "smoke_start" in r.text
+
+
+def _stub_runner(monkeypatch, tmp_path, seconds=1.0):
+    """Replace execute_run with a stub that writes a minimal archive."""
+    def fake_execute(run_id=None, mode="mock", runs_dir=None):
+        async def inner():
+            await asyncio.sleep(seconds)
+            d = tmp_path / run_id
+            d.mkdir(parents=True, exist_ok=True)
+            (d / "city_events.jsonl").write_text(json.dumps(
+                {"seq": 1, "elapsed_ms": 0, "run_id": run_id, "type": "city", "v": 1,
+                 "city_event": "agent_wake", "building": "", "why": "run_start",
+                 "agent_seq": 1, "data": {}}) + "\n")
+            return None
+        return inner()
+    monkeypatch.setattr(app_mod, "execute_run", fake_execute)
+
+
+def test_concurrent_runs_blocked(client, tmp_path, monkeypatch):
+    _stub_runner(monkeypatch, tmp_path, seconds=1.0)
+    with client:  # lifespan
+        r1 = client.post("/api/run")
+        assert r1.status_code == 200
+        r2 = client.post("/api/run")
+        assert r2.status_code == 503
+        assert "concurrent" in r2.json()["error"]
+
+
+def test_per_ip_cooldown(client, tmp_path, monkeypatch):
+    _stub_runner(monkeypatch, tmp_path, seconds=0.1)
+    with client:
+        r1 = client.post("/api/run")
+        assert r1.status_code == 200
+        # wait for the stub run to finish
+        for _ in range(40):
+            if app_mod._state["active_run"] is None:
+                break
+            time.sleep(0.1)
+        r2 = client.post("/api/run")
+        assert r2.status_code == 429
+        assert "cooldown" in r2.json()["error"]
+
+
+def test_live_disabled_without_token(client, monkeypatch):
+    monkeypatch.setattr(app_mod.config, "LIVE_TOKEN", "")
+    with client:
+        r = client.post("/api/run", headers={"x-nightshift-live": "whatever"})
+        assert r.status_code == 200  # silently falls back to mock
+        assert r.json()["mode"] == "mock"
+
+
+def test_live_daily_cap(client, tmp_path, monkeypatch):
+    monkeypatch.setattr(app_mod.config, "LIVE_TOKEN", "sekrit")
+    monkeypatch.setattr(app_mod.config, "LIVE_DAILY_CAP", 2)
+    _stub_runner(monkeypatch, tmp_path, seconds=0.05)
+    monkeypatch.setattr(app_mod.config, "IP_COOLDOWN_S", 0)
+    with client:
+        for i in range(4):
+            app_mod._state["ip_last"] = {}
+            r = client.post("/api/run", headers={"x-nightshift-live": "sekrit"})
+            if app_mod._state["active_run"] is not None:
+                for _ in range(60):
+                    if app_mod._state["active_run"] is None:
+                        break
+                    time.sleep(0.05)
+            if i < 2:
+                assert r.status_code == 200
+            else:
+                assert r.status_code == 429
+                assert "cap" in r.json()["error"]
+
+
+def test_status_endpoint(client, monkeypatch):
+    monkeypatch.setattr(app_mod, "pod_status_snapshot",
+                        lambda: {"ok": True, "pods": {"payments-api": "OOMKilled"}})
+    r = client.get("/api/status")
+    d = r.json()
+    assert d["cluster_ok"] is True
+    assert d["pods"]["payments-api"] == "OOMKilled"
+    assert d["incident_app"] == config.INCIDENT_APP

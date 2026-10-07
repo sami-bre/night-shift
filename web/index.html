@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The Night Shift — an AI agent on-call over a real Kubernetes cluster</title>
+<meta name="description" content="Watch an AI agent get paged at 3 AM, diagnose a crashing service on a real Kubernetes cluster, and heal it — rendered as a pixel-art city where every light is a real tool call.">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <h1>The Night Shift</h1>
+  <p class="sub">an AI agent on-call over a real Kubernetes cluster &mdash; every light is a real tool call</p>
+</header>
+
+<main>
+  <div id="citywrap">
+    <canvas id="city" width="960" height="540"></canvas>
+
+    <div id="alertBanner" class="banner alert hidden">
+      <span class="pulse"></span><span id="alertText">P1: payments-api failing</span>
+    </div>
+
+    <div id="resolveBanner" class="banner resolved hidden">
+      <span id="resolveText"></span>
+      <a id="traceLink" href="#" target="_blank" rel="noopener">view the full trace &rarr;</a>
+    </div>
+
+    <div id="replayTag" class="replay-tag hidden">replay &mdash; recorded run, time-compressed</div>
+  </div>
+
+  <div id="controls">
+    <button id="runBtn" type="button">Run the night shift</button>
+    <span id="statusline" class="statusline">connecting&hellip;</span>
+    <a id="proofBtn" class="proof-link hidden" href="#" target="_blank" rel="noopener">proof panel</a>
+  </div>
+
+  <section class="explain">
+    <p>The city is backed by a <strong>real k3d Kubernetes cluster</strong>. The bank
+    (<code>payments-api</code>) really crashes: a memory limit too small for the cache it
+    allocates, so the container is <code>OOMKilled</code> for real, over and over. An AI
+    agent investigates with read-only tools, raises the limit with the single write tool
+    it has, and verifies the recovery. Smoke, log bubbles, the repair sprite, the dawn —
+    every one of them is driven by an event in the agent's trace. No event, no pixels.</p>
+  </section>
+</main>
+
+<footer>built by <a href="https://samibre.dev/">Samuel Birhanu</a> ·
+<a href="https://github.com/sami-bre/night-shift">source on GitHub</a> ·
+mock LLM by default, live LLM on demand · no tracking</footer>
+
+<script src="city.js"></script>
+</body>
+</html>

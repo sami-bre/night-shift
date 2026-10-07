@@ -1,0 +1,93 @@
+# The city of "The Night Shift" — namespace: city
+#
+# payments-api is BROKEN BY DESIGN: it allocates a 64 MB payments cache under a
+# 32 Mi memory limit, so the container gets OOMKilled for real -> CrashLoopBackOff.
+# The agent's fix is to raise the limit (kubectl_patch_limits -> 256Mi), which
+# triggers a real rollout and a real Running pod. Healthy services: web, redis,
+# postgres (the rest of the city stays alive during the incident).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: payments-api
+  namespace: city
+  labels: { app: payments-api, tier: critical }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: payments-api }
+  template:
+    metadata:
+      labels: { app: payments-api }
+    spec:
+      containers:
+        - name: payments-api
+          image: python:3.12-alpine
+          command:
+            - python
+            - -c
+            - "print('[boot] payments-api starting', flush=True); print('[boot] opening payment ledger', flush=True); import time; time.sleep(0.6); print('[boot] allocating payments cache (64 MB)', flush=True); data = bytearray(64 * 1024 * 1024); print('[boot] payments-api ready', flush=True); time.sleep(3600)"
+          resources:
+            limits:
+              memory: 32Mi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web
+  namespace: city
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: web }
+  template:
+    metadata:
+      labels: { app: web }
+    spec:
+      containers:
+        - name: web
+          image: nginx:alpine
+          ports:
+            - containerPort: 80
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+  namespace: city
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: redis }
+  template:
+    metadata:
+      labels: { app: redis }
+    spec:
+      containers:
+        - name: redis
+          image: redis:alpine
+          ports:
+            - containerPort: 6379
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+  namespace: city
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: postgres }
+  template:
+    metadata:
+      labels: { app: postgres }
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          env:
+            - name: POSTGRES_PASSWORD
+              value: "city-demo-not-a-secret"
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          ports:
+            - containerPort: 5432

@@ -1,0 +1,154 @@
+"""FastAPI server: city page, SSE event stream, run trigger with rate limits.
+
+All routes are JSON; the static frontend is served from web/. Runs are
+archived under runs/<run_id>/ (trace.jsonl, city_events.jsonl, meta.json).
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import time
+
+from fastapi import FastAPI, Request
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
+
+from nightshift import config
+from nightshift.citymap import pod_status_snapshot
+from nightshift.proof import render_proof_page
+from nightshift.runner import execute_run
+from nightshift.trace import Run, new_run_id
+
+app = FastAPI(title="The Night Shift", docs_url=None, redoc_url=None)
+
+_state = {
+    "active_run": None,        # run_id or None
+    "ip_last": {},             # ip -> monotonic of last run START (cooldown)
+    "live_count": {"day": "", "n": 0},
+}
+
+
+def _rate_check(ip: str, live: bool) -> tuple[bool, str, int]:
+    if _state["active_run"] is not None:
+        return False, "a run is already in progress (1 concurrent max) — watch it live", 503
+    last = _state["ip_last"].get(ip, 0.0)
+    if last and time.monotonic() - last < config.IP_COOLDOWN_S:
+        wait = int(config.IP_COOLDOWN_S - (time.monotonic() - last))
+        return False, (f"cooldown: each visitor can start a run every "
+                       f"{config.IP_COOLDOWN_S}s (next in {wait}s)"), 429
+    today = time.strftime("%Y%m%d")
+    if _state["live_count"]["day"] != today:
+        _state["live_count"] = {"day": today, "n": 0}
+    if live:
+        if not config.LIVE_TOKEN:
+            return False, "live mode is disabled on this deployment", 403
+        if _state["live_count"]["n"] >= config.LIVE_DAILY_CAP:
+            return False, ("daily live-run cap reached — the city still runs in "
+                           "mock mode"), 429
+        _state["live_count"]["n"] += 1
+    return True, "", 200
+
+
+async def _run_wrapper(run_id: str, mode: str) -> None:
+    run_dir = config.RUNS_DIR / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / ".active").write_text("1")
+    try:
+        await execute_run(run_id=run_id, mode=mode)
+    except Exception as exc:  # never leave the SSE stream hanging silently
+        run = Run(run_id, mode)
+        run.emit("run_finish", node="runner", error=f"{type(exc).__name__}: {exc}")
+        run.emit_city("resolved_failed", why="runner_error", error=str(exc)[:300])
+        run.write_meta(recovered=False, error=str(exc)[:300])
+    finally:
+        (run_dir / ".active").unlink(missing_ok=True)
+        _state["active_run"] = None
+
+
+@app.post("/api/run")
+async def api_run(request: Request):
+    ip = request.client.host if request.client else "?"
+    live = (config.LIVE_TOKEN
+            and request.headers.get("x-nightshift-live", "") == config.LIVE_TOKEN)
+    ok, reason, code = _rate_check(ip, live=bool(live))
+    if not ok:
+        return JSONResponse({"error": reason}, status_code=code)
+    _state["ip_last"][ip] = time.monotonic()
+
+    run_id = new_run_id()
+    mode = "live" if live else "mock"
+    _state["active_run"] = run_id
+    asyncio.create_task(_run_wrapper(run_id, mode))
+    return JSONResponse({"run_id": run_id, "mode": mode})
+
+
+@app.get("/api/status")
+async def api_status():
+    snap = await asyncio.to_thread(pod_status_snapshot)
+    return JSONResponse({
+        "cluster_ok": snap.get("ok", False),
+        "pods": snap.get("pods", {}),
+        "incident_app": config.INCIDENT_APP,
+        "active_run": _state["active_run"],
+        "latest_run": _latest_run_id(),
+    })
+
+
+def _latest_run_id() -> str | None:
+    if not config.RUNS_DIR.exists():
+        return None
+    runs = sorted((d for d in config.RUNS_DIR.iterdir()
+                   if d.is_dir() and (d / "city_events.jsonl").exists()),
+                  key=lambda d: d.name)
+    return runs[-1].name if runs else None
+
+
+@app.get("/api/events/{run_id}")
+async def api_events(run_id: str, request: Request):
+    run_dir = config.RUNS_DIR / run_id
+    if not run_dir.is_dir():
+        return JSONResponse({"error": "no such run"}, status_code=404)
+
+    async def gen():
+        pos = 0
+        # LIVE if the run is currently active (has .active marker); else REPLAY.
+        # The mode is declared up front so the client never guesses.
+        live = (run_dir / ".active").exists()
+        yield "event: meta\ndata: " + json.dumps({"replay": not live, "run_id": run_id}) + "\n\n"
+        idle_after_done = 0.0
+        while True:
+            if await request.is_disconnected():
+                return
+            path = run_dir / "city_events.jsonl"
+            if path.exists():
+                data = path.read_bytes()
+                new = data[pos:]
+                pos = len(data)
+                for raw in new.splitlines():
+                    line = raw.decode("utf-8", errors="replace").strip()
+                    if line:
+                        yield f"event: city\ndata: {line}\n\n"
+                if new:
+                    idle_after_done = 0.0
+            done = not (run_dir / ".active").exists()
+            if done:
+                idle_after_done += 0.2
+                if idle_after_done >= 1.5:
+                    yield "event: done\ndata: {}\n\n"
+                    return
+            await asyncio.sleep(0.2)
+
+    return StreamingResponse(gen(), media_type="text/event-stream", headers={
+        "Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+@app.get("/api/runs/{run_id}/trace")
+async def api_trace(run_id: str):
+    run_dir = config.RUNS_DIR / run_id
+    if not run_dir.is_dir():
+        return JSONResponse({"error": "no such run"}, status_code=404)
+    return HTMLResponse(render_proof_page(Run.load(run_id)))
+
+
+app.mount("/", StaticFiles(directory=config.WEB_DIR, html=True), name="web")
