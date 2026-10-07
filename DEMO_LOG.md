@@ -15,3 +15,8 @@ below are the real thing. Model: `google/gemini-3-flash-preview`
 Notes: the live agent chose 128Mi (vs the canned script's 256Mi) and read the
 replacement pod's logs — a genuinely different, correct diagnosis path from the
 mock script. Spend read from the run's usage counters (meta.json spend_usd).
+| r-20261007-173256-df49 | google/gemini-3-flash-preview | recovered=True | 4 (get ×3 → patch) — did NOT call kubectl_logs at all | $0.0061 |
+
+Run-to-run variance confirmed: run 1 described the pod first and chose 128Mi; run 2
+never read logs and still fixed it. Total live spend: $0.0123. Key balance after:
+$27.38 (well above the $3 floor).
