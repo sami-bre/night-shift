@@ -219,7 +219,7 @@ def _should_restage(snap: dict) -> bool:
     timer then re-breaks it so the demo's resting state is a live incident."""
     if _state["active_run"] is not None:
         return False
-    if not snap.get("cluster_ok"):
+    if not snap.get("ok"):  # pod_status_snapshot uses "ok", /api/status maps it
         return False
     return snap.get("pods", {}).get(config.INCIDENT_APP) == "Running"
 
@@ -227,17 +227,26 @@ def _should_restage(snap: dict) -> bool:
 async def _incident_timer() -> None:
     while config.INCIDENT_RESET_S > 0:
         await asyncio.sleep(config.INCIDENT_RESET_S)
+        restaged = False
         try:
             snap = await asyncio.to_thread(pod_status_snapshot)
             if _should_restage(snap):
                 await asyncio.to_thread(T.ensure_incident)
+                restaged = True
         except Exception:
-            continue  # degraded cluster / missing kubectl: retry next tick
+            pass  # degraded cluster / missing kubectl: retry next tick
+        print(f"[incident-timer] tick restaged={restaged}", flush=True)
+
+
+_bg_tasks: set[asyncio.Task] = set()
 
 
 @app.on_event("startup")
 async def _start_incident_timer() -> None:
-    asyncio.create_task(_incident_timer())
+    # keep a strong reference: unreferenced tasks can be garbage-collected
+    task = asyncio.create_task(_incident_timer())
+    _bg_tasks.add(task)
+    task.add_done_callback(_bg_tasks.discard)
 
 
 app.mount("/", StaticFiles(directory=config.WEB_DIR, html=True), name="web")

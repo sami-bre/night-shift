@@ -71,9 +71,11 @@ def test_should_restage_logic(client, monkeypatch):
     app_mod._state["active_run"] = "r-x"
     assert _should_restage({"cluster_ok": True, "pods": {"payments-api": "Running"}}) is False
     app_mod._state["active_run"] = None
-    assert _should_restage({"cluster_ok": True, "pods": {"payments-api": "Running"}}) is True
-    assert _should_restage({"cluster_ok": True, "pods": {"payments-api": "CrashLoopBackOff"}}) is False
-    assert _should_restage({"cluster_ok": False, "pods": {"payments-api": "Running"}}) is False
+    assert _should_restage({"ok": True, "pods": {"payments-api": "Running"}}) is True
+    assert _should_restage({"ok": True, "pods": {"payments-api": "CrashLoopBackOff"}}) is False
+    assert _should_restage({"ok": False, "pods": {"payments-api": "Running"}}) is False
+    # tolerate the /api/status shape too
+    assert _should_restage({"cluster_ok": True, "pods": {"payments-api": "Running"}}) is False
 
 
 def test_agent_feed_endpoint(client, tmp_path):
