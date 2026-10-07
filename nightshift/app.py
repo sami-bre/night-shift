@@ -29,6 +29,18 @@ _state = {
 }
 
 
+def _clear_stale_active_markers() -> None:
+    """A server restart means no run can still be active: a leftover .active
+    marker would make the SSE stream claim a dead run is live."""
+    if not config.RUNS_DIR.exists():
+        return
+    for marker in config.RUNS_DIR.glob("*/.active"):
+        marker.unlink(missing_ok=True)
+
+
+_clear_stale_active_markers()
+
+
 def _rate_check(ip: str, live: bool) -> tuple[bool, str, int]:
     if _state["active_run"] is not None:
         return False, "a run is already in progress (1 concurrent max) — watch it live", 503
